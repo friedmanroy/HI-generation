@@ -10,7 +10,9 @@ The goal in this work was double: to be able to generate new HI maps and to have
 
 ### Glow Architecture
 The standard [Glow](https://d4mucfpksywv.cloudfront.net/research-covers/glow/paper/glow.pdf) architecture can be summarized by the following schematic:
+
 ![Glow architecture](assets/glow_architecture.png)
+
 Where, for all $i$, the prior of the latent variables is defined as $y_i\sim\mathcal{N}\left(0,I\right)$.
 
 Glow is mainly constructed by 3 types of layers:
@@ -28,5 +30,9 @@ Given a set of parameters $z$, we can make a normalizing flow model conditional:
 $$p\_x(x|z)=p\_y\left(f\_\theta(x,z)\right)\cdot |\text{det}\frac{\partial f\_\theta(x,z)}{\partial x}|$$
 
 In practice, the way to do this is by changing the layers inside Glow so that they receive $z$ as an input as well. Our approach was similar to that of [SRFlow](https://arxiv.org/pdf/2006.14200v2.pdf),  with a few modifications. By changing the actnorm layer and the affine coupling layers into conditional versions, we allow for conditional information to enter the normalizing flow, as seen below:
+
 ![Conditioning](assets/conditionality.png)
 
+Essentially, instead of actnorm a learnable affine transformation is learned with $z$ as the input, and in affine coupling the learned function receives $z$ as an additional input. 
+
+Changing the architecture in this way makes it possible to learn a parameterized function of the conditional variables
