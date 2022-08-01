@@ -54,9 +54,7 @@ On the left, images from the marginal $p\_x(x)$ were generated and compared to t
 
 ### Parameter Inference
 When the distribution of the true conditional parameters $z$ is known, it can be used in order to infer the parameters given a new data sample using Bayes' law:
-$$
-p\_x(z|x)=\frac{p\_x(x|z)p(z)}{\intop p\_x(x|z)p(z)dz}\approx\frac{p\_x(x|z_i)p(z_i)}{\sum_ip\_x(x|z_i)p(z_i)}
-$$
+$$p\_x(z|x)=\frac{p\_x(x|z)p(z)}{\intop p\_x(x|z)p(z)dz}\approx\frac{p\_x(x|z_i)p(z_i)}{\sum_ip\_x(x|z_i)p(z_i)}$$
 where $z_i\sim p(z)$ are samples from the distribution of parameters.
 
 For HIGlow, $p(z)$ is a uniform distribution, which further simplifies the inference process:
