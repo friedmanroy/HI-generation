@@ -25,10 +25,12 @@ Glow is mainly constructed by 3 types of layers:
 These layers are then stacked into a flow step (as seen in the image above, left) and these flow steps are then stacked $K$ times in each flow block. To make training easier, Glow uses a multiscale approach - after each flow block, the output is split in two (through the channel dimension). One half goes to a new flow block, and the other to a level-specific prior.
 
 As defined, the 3 layers are invertible, which allows for training of the model using standard MLE through the use of the change of variable identity. Let $p_y(y)=\mathcal{N}\left(0, I\right)$ and $x=f^{-1}\_\theta(y)$ where the function $f\_\theta(\cdot)$ is invertible. Then, given a dataset of $x$ s, the MLE is:
+
 $$p\_x(x)=p\_y\left(f\_\theta(x)\right)\cdot |\text{det}\frac{\partial f\_\theta(x)}{\partial x}|\longrightarrow \hat{\theta}=\arg \min\_\theta \\{-\log p\_x(x)\\}$$
 
 ### Making Glow Conditional
 Given a set of parameters $z$, we can make a normalizing flow model conditional by changing the transformation function $f\_\theta(\cdot)$:
+
 $$p\_x(x|z)=p\_y\left(f\_\theta(x,z)\right)\cdot |\text{det}\frac{\partial f\_\theta(x,z)}{\partial x}|$$
 
 In practice, the way to do this is by changing the layers inside Glow so that they receive $z$ as an input as well. Our approach was similar to that of [SRFlow](https://arxiv.org/pdf/2006.14200v2.pdf),  with a few modifications. By changing the actnorm layer and the affine coupling layers into conditional versions, we allow for conditional information to enter the normalizing flow, as seen below:
@@ -54,7 +56,9 @@ On the left, images from the marginal $p\_x(x)$ were generated and compared to t
 
 ### Parameter Inference
 When the distribution of the true conditional parameters $z$ is known, it can be used in order to infer the parameters given a new data sample using Bayes' law:
+
 $$p\_x(z|x)=\frac{p\_x(x|z)p(z)}{\intop p\_x(x|z)p(z)dz}\approx\frac{p\_x(x|z_i)p(z_i)}{\sum_ip\_x(x|z_i)p(z_i)}$$
+
 where $z_i\sim p(z)$ are samples from the distribution of parameters.
 
 For HIGlow, $p(z)$ is a uniform distribution, which further simplifies the inference process:
