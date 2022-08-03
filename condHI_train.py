@@ -4,8 +4,6 @@ import torch
 from tqdm import trange
 from torch.optim import Adam
 from matplotlib import pyplot as plt
-from matplotlib.gridspec import GridSpec
-import matplotlib.animation as manimation
 from pathlib import Path
 from eval_utils import save_images
 
