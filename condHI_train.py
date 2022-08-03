@@ -14,9 +14,9 @@ def data_augment(batch):
     if np.random.rand() < .5: batch = torch.flip(batch, dims=[-2])
     if np.random.rand() < .5: batch = torch.flip(batch, dims=[-1])
 
-    # if np.random.rand() < .25: batch = torch.rot90(batch, k=1, dims=[-2, -1])
-    # elif np.random.rand() < .25: batch = torch.rot90(batch, k=2, dims=[-2, -1])
-    # elif np.random.rand() < .25: batch = torch.rot90(batch, k=3, dims=[-2, -1])
+    if np.random.rand() < .25: batch = torch.rot90(batch, k=1, dims=[-2, -1])
+    elif np.random.rand() < .25: batch = torch.rot90(batch, k=2, dims=[-2, -1])
+    elif np.random.rand() < .25: batch = torch.rot90(batch, k=3, dims=[-2, -1])
 
     return batch
 
@@ -25,22 +25,22 @@ load_ep = 0
 
 # ------------------------------------------------------------------------ define hyperparameters
 # optimizer hyperparameters
-lr = 1e-4
-epochs = 600
-decay_mult = .995
-batch_size = 16
-n_conds = 2
-augment = True
+lr = 1e-4                   # learning rate used to train model
+epochs = 600                # number of epochs to train model
+decay_mult = .995           # decay rate of learning rate (set to 1 for no decay)
+batch_size = 16             # batch size to use while training
+
+n_conds = 2                 # number of conditional parameters
+augment = True              # whether to augment the data with flips and rotations
 
 # model hyperparameters
 params = {
-    'n_channels': 1,
-    'n_blocks': 6,
-    'temperature': 1,
-    'n_flows': 20,
-    'affine': True,
-    'hidden_width': 32,
-    'learn_priors': True,
+    'n_channels': 1,        # number of channels in the input
+    'n_blocks': 6,          # number of blocks in the Glow architecture (basically, floor(log_2(image_size)))
+    'n_flows': 20,          # number of flows in each level of the Glow architecture
+    'affine': True,         # whether the flow steps are affine or not (should usually be true)
+    'hidden_width': 32,     # defines the complexity of each of the flow steps
+    'learn_priors': True,   # whether to train a Gaussian for each latent variable or not
     'cond_features': n_conds
 }
 
@@ -58,6 +58,8 @@ Path(check_path).mkdir(exist_ok=True, parents=True)
 # ------------------------------------------------------------------------ load data
 print('Loading data...', flush=True)
 data = np.load(r_path + 'Images_HI_IllustrisTNG_z=5.99.npy')
+
+# preprocessing of the data
 data = np.log10(data)
 data = (data - np.mean(data))/np.std(data)
 
@@ -94,9 +96,8 @@ conds = 2*(conds - conds.min(dim=0)[0][None])/(conds.max(dim=0)[0] - conds.min(d
 conds = conds[:, :n_conds]
 
 # ------------------------------------------------------------------------ split training from rest of data
-# get indices (leave out every 15-th sample
+# get indices (leave out every 15-th sample)
 inds = [i for i in range(data.shape[0]) if (i+1)%15 <= 12]
-print(inds[:30])
 
 data = data[inds]
 conds = conds[inds]
@@ -128,6 +129,7 @@ optim = Adam(model.parameters(), lr=lr)
 # print(f'Learning rate is: {optim.param_groups[0]["lr"]:.2E}')
 
 model, data, conds = model.to(device), data.to(device), conds.to(device)
+
 # ------------------------------------------------------------------------ train model
 losses = []
 pbar = trange(epochs, ascii=True)
