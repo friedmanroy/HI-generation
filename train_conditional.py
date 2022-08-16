@@ -58,15 +58,15 @@ Path(check_path).mkdir(exist_ok=True, parents=True)
 
 # ------------------------------------------------------------------------ load data
 train_dataset = HI_dataset(r_path, train=True)
+print(f'Training with {len(train_dataset)} samples')
 loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True,
-                    num_workers=2 if torch.cuda.is_available() else 0,
                     pin_memory=torch.cuda.is_available(),
                     )
 n_batches = len(loader)
 
 test_dataset = HI_dataset(r_path, train=False)
-test_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True,
-                         num_workers=2 if torch.cuda.is_available() else 0,
+print(f'Testing with {len(train_dataset)} samples')
+test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=True,
                          pin_memory=torch.cuda.is_available(),
                          )
 
@@ -110,9 +110,11 @@ for i in pbar:
         optim.step()
 
         ep_loss.append(loss.item())
+        test_loss = early_stop.losses[-1] if len(early_stop.losses)>0 else 0
         if not j%100: pbar.set_postfix_str(f'epoch {i+load_ep}; {j}/{len(loader)}; '
                                            f'step loss: {ep_loss[-1]:.2f}, avg.: {np.mean(ep_loss):.2f}, '
-                                           f'lr: {optim.param_groups[0]["lr"]:.2E}')
+                                           f'lr: {optim.param_groups[0]["lr"]:.2E}, '
+                                           f'test loss: {test_loss:.2f}')
 
         # plot conditional samples
         if not j%(n_batches//(5 if i < 5 else 2)):
