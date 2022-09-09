@@ -2,9 +2,9 @@ import torch
 import numpy as np
 from torch import nn
 from .flow_layers import GlowBlock, ActNorm, InvConv2D, FlowSequential, Squeeze, Shuffle
-from .conditional_layers import CondGlowBlock, CondAffineCoupling, AffineInjector
-from .priors import SplitGaussianPrior, GaussianPrior, PPCAPrior, SplitOp
-from typing import Union, List, Tuple
+from .conditional_layers import _cond_block
+from .priors import SplitGaussianPrior, GaussianPrior, CondGaussianPrior, SplitCondPrior
+from typing import List, Tuple
 
 T = torch.Tensor
 
@@ -68,25 +68,25 @@ class Glow(nn.Module):
         return [self.temperature * torch.randn(N, *shp, device=device) for shp in self.latent_shapes]
 
 
-def _cond_block(n_channels, cond_features, hidden_width, affine, n_flows, squeeze: bool = True, shuffle: bool = False):
-    def flow():
-        return FlowSequential(
-            InvConv2D(in_channel=n_channels) if not shuffle else Shuffle(dim=0),
-            AffineInjector(n_channels=n_channels, cond_channels=cond_features, hidden_width=hidden_width,
-                           affine=affine, same_size=False),
-            CondAffineCoupling(n_channels=n_channels, cond_features=cond_features, affine=affine,
-                               hidden_width=hidden_width, same_size=False)
-        )
-
-    bl = [flow() for _ in range(n_flows)]
-    if squeeze: bl = [Squeeze()] + bl
-    return FlowSequential(*bl)
-
-
 class CondGlow(nn.Module):
 
     def __init__(self, n_channels: int, cond_features: int, n_flows: int, n_blocks: int, temperature: float = 1,
-                 affine: bool = True, hidden_width: int = 512, learn_priors: bool = False, start: bool = False):
+                 affine: bool = True, hidden_width: int = 512, learn_priors: bool = False, start: bool = False,
+                 cond_priors: bool = False, input_size: int = None):
+        """
+        Creates the conditional Glow model used for HIGlow
+        :param n_channels: number of channels in the input images
+        :param cond_features: number of conditional features to use
+        :param n_flows: number of flows in each cGlow block
+        :param n_blocks: number of blocks to use; at most log2(size) where size is the smallest spatial dimension
+        :param temperature: the temperature used in the prior (should usually just be set to 1)
+        :param affine: bool indicating whether to use affine coupling layers or just linear coupling layers
+        :param hidden_width: width of hidden layers in the affine coupling and affine injector layers
+        :param learn_priors: bool indicating whether the prior's mean and variance should be learned
+        :param start: bool indicating whether the first layer in the model should be an actnorm layer or not
+        :param cond_priors: bool indicating whether to use conditional priors or not
+        :param input_size: if cond_priors is True, the size of the input must be defined to properly work
+        """
         super(CondGlow, self).__init__()
         self.n_flows, self.n_blocks = n_flows, n_blocks
         self.cond_features = cond_features
@@ -98,13 +98,30 @@ class CondGlow(nn.Module):
         self.start = start
 
         if self.start: self.strt = FlowSequential(ActNorm(n_channels))
+        if cond_priors: input_size = input_size*input_size//4
         n_channels = 4 * n_channels
         for i in range(self.n_blocks):
+            # define conditional block
             bl = _cond_block(n_channels, cond_features, hidden_width, affine, n_flows)
-            self.priors.append(SplitGaussianPrior(bl, learn_params=learn_priors, temperature=temperature))
+
+            # add conditional priors
+            if cond_priors:
+                self.priors.append(SplitCondPrior(bl, cond_priors, n_channels*input_size, hidden_width, temperature))
+            # use Gaussian prior
+            else: self.priors.append(SplitGaussianPrior(bl, learn_params=learn_priors, temperature=temperature))
+
+            # after each block, input is squeezed and split, so channels increase by a factor of 2
             n_channels = 2 * n_channels
+            if cond_priors: input_size = input_size//4
+
+            # add final conditional block
         bl = _cond_block(n_channels // 4, cond_features, hidden_width, affine, n_flows, squeeze=False)
-        self.priors.append(GaussianPrior(bl, learn_params=learn_priors, temperature=temperature))
+
+        if cond_priors:
+            self.priors.append(
+                FlowSequential(bl, CondGaussianPrior(cond_features, n_channels*input_size, hidden_width, temperature))
+            )
+        else: self.priors.append(GaussianPrior(bl, learn_params=learn_priors, temperature=temperature))
 
     def forward(self, x: T, cond: T) -> Tuple[List[T], T]:
         # save input shape

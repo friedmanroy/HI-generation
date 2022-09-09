@@ -4,14 +4,22 @@ manipulation of the layers and models, while also making the code more readible
 """
 import torch
 from torch import nn
-from torch.nn import functional as F
 from typing import Tuple
-from .flow_layers import FlowModule, ZeroConv2d, _random_LU, FlowSequential, Squeeze, _diff_clamp
+from .flow_layers import FlowModule, ZeroConv2d, _diff_clamp, FlowSequential, InvConv2D, Squeeze, Shuffle
 
 T = torch.Tensor
 
 
 def _get_MLP(in_features: int, out_features: int, hidden_width: int=64, depth: int=1, zero: bool=False):
+    """
+    Helper function that creates an MLP for use in various modules
+    :param in_features: number of features to use
+    :param out_features: number of output features
+    :param hidden_width: width of the hidden layers in the MLP
+    :param depth: number of hidden layers in the MLP
+    :param zero: whether to initialize the MLP as the zero function
+    :return: a torch.nn Module representing the wanted MLP
+    """
     layers = [nn.Linear(in_features, hidden_width), nn.ReLU(inplace=True)]
     for i in range(depth):
         layers.append(nn.Linear(hidden_width, hidden_width))
@@ -24,23 +32,30 @@ def _get_MLP(in_features: int, out_features: int, hidden_width: int=64, depth: i
     return nn.Sequential(*layers)
 
 
-class CondActNorm(FlowModule):
+def _cond_block(n_channels, cond_features, hidden_width, affine, n_flows, squeeze: bool = True, shuffle: bool = False):
+    """
+    Create conditional Glow block
+    :param n_channels: number of input channels
+    :param cond_features: number of conditional features
+    :param hidden_width: hidden width used in the affine injectors and coupling layers
+    :param affine: whether the transformation should be affine or just linear
+    :param n_flows: number of flows in the block
+    :param squeeze: whether to squeeze the input at the start of the block or not
+    :param shuffle: a bool indicating whether to shuffle instead of using the invertible 2D convolutions
+    :return: a flow module that represents a conditional Glow's flow block
+    """
+    def flow():
+        return FlowSequential(
+            InvConv2D(in_channel=n_channels) if not shuffle else Shuffle(dim=0),
+            AffineInjector(n_channels=n_channels, cond_channels=cond_features, hidden_width=hidden_width,
+                           affine=affine, same_size=False),
+            CondAffineCoupling(n_channels=n_channels, cond_features=cond_features, affine=affine,
+                               hidden_width=hidden_width, same_size=False)
+        )
 
-    def __init__(self, n_channels: int, cond_features: int, width: int=32, depth: int=1):
-        super().__init__()
-        self.register_module('loc', _get_MLP(cond_features, n_channels, hidden_width=width, depth=depth, zero=True))
-        self.register_module('scale', _get_MLP(cond_features, n_channels, hidden_width=width, depth=depth))
-
-    def forward(self, x: T, cond: T=None) -> Tuple[T, T]:
-        _, _, height, width = x.shape
-
-        scale = self.scale(cond)*.1
-        log_abs = torch.log(torch.abs(scale))
-        logdet = height * width * torch.sum(log_abs, dim=1)
-        return scale * (x + self.loc(cond)), logdet
-
-    def reverse(self, y: T, cond: T=None) -> T:
-        return y * 10 / self.scale(cond) - self.loc(cond)
+    bl = [flow() for _ in range(n_flows)]
+    if squeeze: bl = [Squeeze()] + bl
+    return FlowSequential(*bl)
 
 
 class CondAffineCoupling(FlowModule):
@@ -122,53 +137,6 @@ class CondAffineCoupling(FlowModule):
         return torch.cat([out_a, in_b], 1)
 
 
-class CondInvConv2D(FlowModule):
-
-    def __init__(self, n_channels: int, cond_features: int, hidden_width: int=128, depth: int=1):
-        super(CondInvConv2D, self).__init__()
-        w_p, w_l, w_s, w_u, u_mask, l_mask = _random_LU(n_channels)
-        self.n_channels = n_channels
-        self.register_buffer("w_p", w_p)
-        self.register_buffer("u_mask", u_mask)
-        self.register_buffer("l_mask", l_mask)
-        self.register_buffer("s_sign", torch.sign(w_s))
-        self.register_buffer("l_eye", torch.eye(l_mask.shape[0]))
-        self.register_module('w_l', _get_MLP(cond_features, n_channels*n_channels,
-                                             hidden_width=hidden_width, depth=depth))
-        self.register_module('w_u', _get_MLP(cond_features, n_channels * n_channels,
-                                             hidden_width=hidden_width, depth=depth))
-        self.register_module('w_s', _get_MLP(cond_features, n_channels,
-                                             hidden_width=hidden_width, depth=depth))
-
-
-    def calc_weight(self, cond: T):
-        w_l = self.w_l(cond).reshape(cond.shape[0], self.n_channels, self.n_channels)
-        w_u = self.w_u(cond).reshape(cond.shape[0], self.n_channels, self.n_channels)
-        w_s = self.w_s(cond)
-        weight = (
-                self.w_p
-                @ (w_l * self.l_mask + self.l_eye)
-                @ ((w_u * self.u_mask) + torch.diag(self.s_sign * torch.exp(w_s)))
-        )
-
-        return weight, w_s
-
-    def forward(self, x: T, cond: T=None) -> Tuple[T, T]:
-        _, _, height, width = x.shape
-
-        weight, w_s = self.calc_weight(cond)
-
-        out = (weight[:, None]@x.transpose(dim0=1, dim1=2)).transpose(dim0=1, dim1=2)
-        logdet = height * width * torch.sum(w_s, dim=-1)
-
-        return out, logdet
-
-    def reverse(self, y: T, cond: T=None) -> T:
-        weight, _ = self.calc_weight(cond)
-        out = (weight[:, None]@y.transpose(dim0=1, dim1=2)).transpose(dim0=1, dim1=2)
-        return out
-
-
 class AffineInjector(FlowModule):
 
     def __init__(self, n_channels: int, cond_channels: int, hidden_width: int=512, affine: bool=True,
@@ -231,57 +199,3 @@ class AffineInjector(FlowModule):
             log_scale = _diff_clamp(log_scale, min=-5, max=5)
         else: log_scale = torch.zeros_like(bias)
         return torch.exp(-log_scale)*(y - bias)
-
-
-class CondGlowFlow(FlowModule):
-
-    def __init__(self, n_channels: int, cond_features: int, affine: bool=True, hidden_layer: int=512):
-        """
-        A single flow block used in HI-generation
-        :param n_channels: the number of input (and output) channels
-        :param transf: the transformation to use in the affine coupling layer; if None is supplied, the same
-                       transformation that was used in HI-generation is utilized
-        :param affine: a boolean indication whether to use an affine or additive layer
-        :param hidden_layer: the number of channels in the hidden layer - only used if no transform is supplied
-        """
-        super(CondGlowFlow, self).__init__()
-        self.register_module('flow',
-                             FlowSequential(CondActNorm(n_channels=n_channels, cond_features=cond_features),
-                                            CondInvConv2D(n_channels=n_channels, cond_features=cond_features),
-                                            CondAffineCoupling(n_channels=n_channels, cond_features=cond_features,
-                                                               affine=affine, hidden_width=hidden_layer))
-                             )
-
-    def forward(self, x: T, cond=None) -> Tuple[T, T]:
-        return self.flow.forward(x)
-
-    def reverse(self, y: T, cond=None) -> T:
-        return self.flow.reverse(y)
-
-
-class CondGlowBlock(FlowModule):
-
-    def __init__(self, n_channels: int, cond_features: int, n_flows: int=None, squeeze: bool=True,
-                 hidden_layer: int=512, affine: bool=True):
-        """
-        A block in the HI-generation architecture
-        :param n_channels: the number of channels in the input
-        :param flows: either a list of flows or a singular flow that will be used in the block
-        :param n_flows: if a single flow was supplied for the "flows" argument, a number should be supplied here to
-                        control the number of instances of the same flow should be used in the block
-        :param squeeze: a boolean indicating whether the input should be squeezed as mentioned in section 3.6 of RealNVP
-        :param hidden_layer: the number of channels in the hidden layer - only used if no Flow is supplied
-        :param affine: whether to use affine transformations - only used if no Flow is supplied
-        """
-        super(CondGlowBlock, self).__init__()
-        chans = 4*n_channels if squeeze else n_channels
-        layers = [CondGlowFlow(n_channels=chans, cond_features=cond_features, affine=affine, hidden_layer=hidden_layer)
-                  for _ in range(n_flows)]
-        layers = FlowSequential(Squeeze(), *layers) if squeeze else FlowSequential(*layers)
-        self.register_module('block', layers)
-
-    def forward(self, x: T, cond=None) -> Tuple[T, T]:
-        return self.block.forward(x)
-
-    def reverse(self, y: T, cond=None) -> T:
-        return self.block.reverse(y)
