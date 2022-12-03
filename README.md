@@ -1,3 +1,7 @@
+
+[![arXiv](https://img.shields.io/badge/arXiv-2211.12724-b31b1b.svg)](https://arxiv.org/abs/2211.12724)
+
+
 # Conditional Glow for HI Map Generation
 > This work was completed as part of the [Flatiron Institute](https://www.simonsfoundation.org/flatiron/) 2022 [MLxScience Summer School](https://www.simonsfoundation.org/grant/2022-flatiron-machine-learning-x-science-summer-school/)
 
