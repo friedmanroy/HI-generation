@@ -54,7 +54,7 @@ As can be seen, HIGlow is able to generate maps that are very similar to the rea
 ### Model Evaluation
 To quantify this more explicitly, we can look at the mean power spectrum and its standard deviation using generated data versus training data:
 
-![Evaluation](assets/quantitative.png)
+![Evaluation](assets/quantitative_n.png)
 
 On the left, images from the marginal $p\_x(x)$ were generated and compared to the training images and [HIFlow](https://arxiv.org/pdf/2110.02983.pdf) (another method using normalizing flows for the same purpose). HIGlow does a good job of accurately capturing the mean statistics of the original HI maps. On the right, images were generated from the conditional $p\_x(x|z)$ and compared to the training images. Here, again, HIGlow follows the statistics of the CAMELS data.
 
