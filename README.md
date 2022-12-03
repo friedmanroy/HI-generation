@@ -67,7 +67,7 @@ where $z_i\sim p(z)$ are samples from the distribution of parameters.
 
 For HIGlow, $p(z)$ is a uniform distribution, which further simplifies the inference process:
 
-![Parameter inference](assets/inference.png)
+![Parameter inference](assets/inference_n.png)
 
 Above, the red cross indicates the true parameter value while the contour lines indicate the distribution $p\_x(z|x)$ learned by HIGlow. In all cases, the true parameter value are close to the mode of the posterior distribution.
 
