@@ -75,30 +75,30 @@ class CondGaussianPrior(FlowModule):
         :param temperature:
         """
         super(CondGaussianPrior, self).__init__()
-        self.register_module('mean', _get_MLP(n_conds, out_size, hidden_width, zero=True))
-        self.register_module('log_var', _get_MLP(n_conds, out_size, hidden_width, zero=True))
+        self.register_module('mean', _get_MLP(n_conds, out_size, hidden_width, zero=False))
+        self.register_module('log_var', _get_MLP(n_conds, out_size, hidden_width, zero=False))
         self.shape = None
         self.temp = temperature
+        self._out = out_size
 
-    def _initialize(self, x: T, cond: T):
+    def _initialize(self, x: T):
         """
         Initializes the parameters of the prior for further learning
         :param x: the input used in order to get the shapes needed
         """
-        with torch.no_grad(): z, _ = self.flow.forward(x, cond=cond)
-        self.shape = list(z.shape[1:])
+        self.shape = list(x.shape[1:])
 
     def _logp(self, z: T, cond: T):
-        mean = self.mean(cond).reshape(-1, self.shape)
+        mean = self.mean(cond).reshape(-1, *self.shape)
         log_var = _diff_clamp(self.log_var(cond), -3, 5)
-        m = (z - mean)*torch.sqrt(torch.exp(-log_var.reshape(-1, self.shape)))
+        m = (z - mean)*torch.sqrt(torch.exp(-log_var.reshape(-1, *self.shape)))
         logp = -0.5*torch.sum(m.reshape(m.shape[0], -1)**2, dim=1) \
                -0.5*np.prod(self.shape)*np.log(2*np.pi) \
                -0.5*torch.sum(log_var, dim=1)
         return logp
 
     def forward(self, x: T, cond: T=None):
-        if self.shape is None: self._initialize(x, cond=cond)
+        if self.shape is None: self._initialize(x)
         return x, self._logp(x, cond)
 
     def reverse(self, y: T=None, cond: T=None):
@@ -109,8 +109,8 @@ class CondGaussianPrior(FlowModule):
         return ll
 
     def sample(self, N: int=1, cond: T=None) -> T:
-        mean = self.mean(cond).reshape(-1, self.shape)
-        log_var = _diff_clamp(self.log_var(cond), -3, 5).reshape(-1, self.shape)
+        mean = self.mean(cond).reshape(-1, *self.shape)
+        log_var = _diff_clamp(self.log_var(cond), -3, 5).reshape(-1, *self.shape)
         z = mean + \
             self.temp * torch.sqrt(torch.exp(log_var)) * \
             torch.randn(N, *self.shape, dtype=mean.dtype, device=mean.device)
@@ -170,18 +170,16 @@ class SplitCondPrior(nn.Module):
     def __init__(self, flow: FlowModule, n_conds: int, out_size: int, hidden_width: int=64,
                  temperature: float=1.):
         super(SplitCondPrior, self).__init__()
-        self.register_module('prior', CondGaussianPrior(n_conds, out_size, hidden_width=hidden_width,
+        self.register_module('prior', CondGaussianPrior(n_conds, out_size//2, hidden_width=hidden_width,
                                                         temperature=temperature))
         self.register_module('split', SplitOp(flow))
 
     def forward(self, x: T, cond: T=None) -> Tuple[T, T, T]:
-        x, logdet = self.flow.forward(x, cond=cond)
-        x, z = self.split.forward(x)
-        if self.shape is None: self._initialize(z)
+        x, z, logdet = self.split.forward(x, cond=cond)
         return x, z, self.prior.likelihood(z, cond=cond) + logdet
 
     def reverse(self, x: T, z: T=None, cond: T=None) -> T:
-        return self.flow.reverse(self.split.reverse(x, z), cond=cond)
+        return self.split.reverse(x, z, cond=cond)
 
     def likelihood(self, x: T, cond: T=None) -> Tuple[T, T]:
         x, z, log_det = self.split.forward(x, cond=cond)

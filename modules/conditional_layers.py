@@ -5,7 +5,7 @@ manipulation of the layers and models, while also making the code more readible
 import torch
 from torch import nn
 from typing import Tuple
-from .flow_layers import FlowModule, ZeroConv2d, _diff_clamp, FlowSequential, InvConv2D, Squeeze, Shuffle
+from .flow_layers import FlowModule, ZeroConv2d, _diff_clamp, FlowSequential, InvConv2D, Squeeze, Shuffle, ActNorm
 
 T = torch.Tensor
 
@@ -32,7 +32,8 @@ def _get_MLP(in_features: int, out_features: int, hidden_width: int=64, depth: i
     return nn.Sequential(*layers)
 
 
-def _cond_block(n_channels, cond_features, hidden_width, affine, n_flows, squeeze: bool = True, shuffle: bool = False):
+def _cond_block(n_channels, cond_features, hidden_width, affine, n_flows, squeeze: bool=True,
+                shuffle: bool=False, add_actnorm: bool=False):
     """
     Create conditional Glow block
     :param n_channels: number of input channels
@@ -42,6 +43,7 @@ def _cond_block(n_channels, cond_features, hidden_width, affine, n_flows, squeez
     :param n_flows: number of flows in the block
     :param squeeze: whether to squeeze the input at the start of the block or not
     :param shuffle: a bool indicating whether to shuffle instead of using the invertible 2D convolutions
+    :param add_actnorm: a bool indicating whether to add an actnorm at beginning of each block
     :return: a flow module that represents a conditional Glow's flow block
     """
     def flow():
@@ -54,6 +56,7 @@ def _cond_block(n_channels, cond_features, hidden_width, affine, n_flows, squeez
         )
 
     bl = [flow() for _ in range(n_flows)]
+    if add_actnorm: bl = [ActNorm(n_channels)] + bl
     if squeeze: bl = [Squeeze()] + bl
     return FlowSequential(*bl)
 

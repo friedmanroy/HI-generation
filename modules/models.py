@@ -72,7 +72,7 @@ class CondGlow(nn.Module):
 
     def __init__(self, n_channels: int, cond_features: int, n_flows: int, n_blocks: int, temperature: float = 1,
                  affine: bool = True, hidden_width: int = 512, learn_priors: bool = False, start: bool = False,
-                 cond_priors: bool = False, input_size: int = None):
+                 cond_priors: bool = False, input_size: int = None, cond_hidden: int = None, add_actnorm: bool = False):
         """
         Creates the conditional Glow model used for HIGlow
         :param n_channels: number of channels in the input images
@@ -86,6 +86,9 @@ class CondGlow(nn.Module):
         :param start: bool indicating whether the first layer in the model should be an actnorm layer or not
         :param cond_priors: bool indicating whether to use conditional priors or not
         :param input_size: if cond_priors is True, the size of the input must be defined to properly work
+        :param cond_hidden: width of hidden layer in conditional priors; if None, the same width as in the rest of
+                            the model is used
+        :param add_actnorm: a bool indicating whether to add an actnorm at beginning of each block or not
         """
         super(CondGlow, self).__init__()
         self.n_flows, self.n_blocks = n_flows, n_blocks
@@ -96,17 +99,18 @@ class CondGlow(nn.Module):
         self.priors = nn.ModuleList()
         self.in_shape, self.latent_shapes = None, None
         self.start = start
+        cond_hidden = cond_hidden if cond_hidden is not None else hidden_width
 
         if self.start: self.strt = FlowSequential(ActNorm(n_channels))
         if cond_priors: input_size = input_size*input_size//4
         n_channels = 4 * n_channels
         for i in range(self.n_blocks):
             # define conditional block
-            bl = _cond_block(n_channels, cond_features, hidden_width, affine, n_flows)
+            bl = _cond_block(n_channels, cond_features, hidden_width, affine, n_flows, add_actnorm=add_actnorm)
 
             # add conditional priors
             if cond_priors:
-                self.priors.append(SplitCondPrior(bl, cond_priors, n_channels*input_size, hidden_width, temperature))
+                self.priors.append(SplitCondPrior(bl, cond_features, input_size*n_channels, cond_hidden, temperature))
             # use Gaussian prior
             else: self.priors.append(SplitGaussianPrior(bl, learn_params=learn_priors, temperature=temperature))
 
@@ -114,12 +118,13 @@ class CondGlow(nn.Module):
             n_channels = 2 * n_channels
             if cond_priors: input_size = input_size//4
 
-            # add final conditional block
-        bl = _cond_block(n_channels // 4, cond_features, hidden_width, affine, n_flows, squeeze=False)
+        # add final conditional block
+        bl = _cond_block(n_channels//4, cond_features, hidden_width, affine, n_flows, squeeze=False,
+                         add_actnorm=add_actnorm)
 
         if cond_priors:
             self.priors.append(
-                FlowSequential(bl, CondGaussianPrior(cond_features, n_channels*input_size, hidden_width, temperature))
+                FlowSequential(bl, CondGaussianPrior(cond_features, n_channels//4, cond_hidden, temperature))
             )
         else: self.priors.append(GaussianPrior(bl, learn_params=learn_priors, temperature=temperature))
 

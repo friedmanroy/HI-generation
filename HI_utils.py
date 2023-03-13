@@ -5,7 +5,17 @@ from torchvision.transforms import Compose, RandomVerticalFlip, RandomHorizontal
 import csv
 
 
-def load_HI_data(r_path: str= '', return_funcs: bool=False, test_confs: int=3, n_params: int=2):
+def load_HI_data(r_path: str= '', return_funcs: bool=False, test_confs: int=3, n_params: int=2,
+                 sigmoid_normalization: bool=True):
+    """
+    Loads and normalizes the HI data
+    :param r_path: root path for HI data
+    :param return_funcs: a flag indicating whether the normalization functions should be returned or not
+    :param test_confs: a flag indicating whether the test should be returned
+    :param n_params: number of parameters to return from the simulations
+    :param sigmoid_normalization: a flag indicating whether the normalization should pass through a sigmoid function
+    :return:
+    """
 
     # ---------------------------------------------------------------------- Load HI maps and transform
     data = np.load(r_path + 'Images_HI_IllustrisTNG_z=5.99.npy')
@@ -17,15 +27,21 @@ def load_HI_data(r_path: str= '', return_funcs: bool=False, test_confs: int=3, n
     data = torch.from_numpy(data)[:, None].float()
 
     # ---------------------------------------------------------------------- Define data normalization transforms
-    dmean, dstd = torch.mean(data), torch.std(data)
+    # if sigmoid normalization, standardize data
+    if sigmoid_normalization: dmean, dstd = torch.mean(data), torch.std(data)
+    # if not sigmoid, make sure normalization is so that the data is between 0 and 1
+    else: dmean, dstd = torch.min(data), (torch.max(data) - torch.min(data))
 
     def norm_func(d: torch.Tensor) -> torch.Tensor:
         d = (d - dmean) / dstd
-        return 2 / (1+torch.exp(-d)) - 1
+        if sigmoid_normalization:
+            d = 2 / (1+torch.exp(-d)) - 1
+        return d
 
     def ret_func(d: torch.Tensor) -> torch.Tensor:
-        d = (torch.clamp(d, -.999, .999) + 1)/2
-        d = torch.log(d/(d-1))
+        if sigmoid_normalization:
+            d = (torch.clamp(d, -.999, .999) + 1)/2
+            d = torch.log(d/(1-d))
         return d*dstd + dmean
 
     data_funcs = tuple([norm_func, ret_func])
@@ -77,8 +93,8 @@ def load_HI_data(r_path: str= '', return_funcs: bool=False, test_confs: int=3, n
     return (dtrain, ctrain), (dtest, ctest)
 
 
-def HI_dataset(r_path: str='', train: bool=True):
-    (dtrain, ctrain), (dtest, ctest) = load_HI_data(r_path)
+def HI_dataset(r_path: str='', train: bool=True, sigmoid_normalization: bool=False):
+    (dtrain, ctrain), (dtest, ctest) = load_HI_data(r_path, sigmoid_normalization=sigmoid_normalization)
     return TensorDataset(dtrain, ctrain) if train else TensorDataset(dtest, ctest)
 
 
@@ -123,7 +139,7 @@ class EarlyStop:
         self.patience = patience
         self.stop = False
 
-    def __call__(self, loss_func, train_loss):
+    def __call__(self, loss_func):
         self.epoch += 1
 
         if not self.epoch%self.validate_every:
@@ -134,7 +150,7 @@ class EarlyStop:
             self.losses.append(loss)
             self.epochs.append(self.epoch)
 
-            if loss > train_loss: self.counter += 1
+            if self.losses[-1] > self.losses[-2]: self.counter += 1
             else: self.counter = 0
             if self.counter > self.patience: self.stop = True
 

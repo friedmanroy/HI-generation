@@ -2,7 +2,7 @@ from modules.models import CondGlow
 import numpy as np
 import torch
 from tqdm import trange
-from torch.optim import AdamW
+from torch.optim import Adam
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 from torch.utils.data import DataLoader
 from matplotlib import pyplot as plt
@@ -18,6 +18,9 @@ parser.add_argument('-a', type=int, default=1, help='0 for no augment, else augm
 parser.add_argument('-w', type=int, default=16, help='hidden width to use (defualt=16)')
 parser.add_argument('-e', type=int, default=600, help='number of epochs (defualt=600)')
 parser.add_argument('-bs', type=int, default=64, help='batch size to use for training (defualt=64)')
+parser.add_argument('-prior', type=int, default=0, help='whether to use conditional priors or not')
+parser.add_argument('-sig', type=int, default=0, help='whether to use sigmoid normalization or not')
+parser.add_argument('-actnorm', type=int, default=0, help='whether to add actnorm before each block or not')
 
 args = parser.parse_args()
 
@@ -28,7 +31,6 @@ device = 'cuda' if torch.cuda.is_available() else 'cpu'
 # optimizer hyperparameters
 lr = 3e-4
 epochs = args.e
-decay_mult = .995
 batch_size = args.bs
 n_conds = 2
 augment = args.a != 0
@@ -42,14 +44,23 @@ params = {
     'affine': True,
     'hidden_width': args.w,
     'learn_priors': True,
-    'cond_features': n_conds
+    'cond_features': n_conds,
+    'cond_priors': args.prior != 0,
+    'add_actnorm': args.actnorm != 0,
+    'input_size': 64,
+    'cond_hidden': 8,
 }
 
 # ------------------------------------------------------------------------ define paths
 r_path = ''
-path = r_path +\
-       f'condHI_maps/{"aug_" if augment else ""}blocks={params["n_blocks"]}_flows={params["n_flows"]}_' \
-       f'hidden={params["hidden_width"]}_batch={batch_size}_nconds={n_conds}/'
+if args.prior != 0:
+    path = r_path +\
+           f'cond_prior/{"aug_" if augment else ""}blocks={params["n_blocks"]}_flows={params["n_flows"]}_' \
+           f'hidden={params["hidden_width"]}_batch={batch_size}_nconds={n_conds}/'
+else:
+    path = r_path +\
+           f'condHI_maps/{"aug_" if augment else ""}blocks={params["n_blocks"]}_flows={params["n_flows"]}_' \
+           f'hidden={params["hidden_width"]}_batch={batch_size}_nconds={n_conds}/'
 
 sample_path = path + 'samples/'
 Path(sample_path).mkdir(exist_ok=True, parents=True)
@@ -57,15 +68,15 @@ check_path = path + 'checkpoints/'
 Path(check_path).mkdir(exist_ok=True, parents=True)
 
 # ------------------------------------------------------------------------ load data
-train_dataset = HI_dataset(r_path, train=True)
+train_dataset = HI_dataset(r_path, train=True, sigmoid_normalization=args.sig != 0)
 print(f'Training with {len(train_dataset)} samples')
 loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True,
                     pin_memory=torch.cuda.is_available(),
                     )
 n_batches = len(loader)
 
-test_dataset = HI_dataset(r_path, train=False)
-print(f'Testing with {len(train_dataset)} samples')
+test_dataset = HI_dataset(r_path, train=False, sigmoid_normalization=args.sig != 0)
+print(f'Testing with {len(test_dataset)} samples')
 test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=True,
                          pin_memory=torch.cuda.is_available(),
                          )
@@ -74,9 +85,10 @@ test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=True,
 model = CondGlow(**params)
 tmp_imgs, tmp_conds = next(iter(loader))
 with torch.no_grad(): model.forward(tmp_imgs, tmp_conds)
+print(f'Number of parameters in model:{sum(p.numel() for p in model.parameters() if p.requires_grad)}')
 
-optim = AdamW(model.parameters(), lr=lr)
-lr_scheduler = ReduceLROnPlateau(optim, patience=5, factor=.2)
+optim = Adam(model.parameters(), lr=lr)
+lr_scheduler = ReduceLROnPlateau(optim, patience=10, factor=.8, min_lr=1e-5)
 
 # ------------------------------------------------------------------------ load pretrained model
 # load_ep = 350
@@ -84,7 +96,7 @@ lr_scheduler = ReduceLROnPlateau(optim, patience=5, factor=.2)
 
 # ------------------------------------------------------------------------ define loss function and early stopper
 model = model.to(device)
-early_stop = EarlyStop(test_loader, validate_every=5, patience=5)
+early_stop = EarlyStop(test_loader, validate_every=2, patience=5)
 
 
 def loss_func(point: tuple):
@@ -118,16 +130,17 @@ for i in pbar:
 
         # plot conditional samples
         if not j%(n_batches//(5 if i < 5 else 2)):
-            samp, cond = batch
+            bsamp, cond = batch
             it = i*n_batches + j + 1
 
             cs = cond[:16]
-            samps = model.sample(N=16, cond=cs.to(device), clip_val=500).cpu().detach().numpy()[:, 0]
+            n_samps = cs.shape[0]
+            samps = model.sample(N=n_samps, cond=cs.to(device), clip_val=500).cpu().detach().numpy()[:, 0]
             samps = .5*np.clip(samps, -1, 1) + 1
 
             save_images([samp for samp in samps], save_p=sample_path + f'{i+load_ep+1:04}-{j+1:04}.png')
             plt.close('all')
-            save_images([s[0].cpu().numpy() for s in samp[:16]], save_p=sample_path + f'real.png')
+            save_images([s[0].cpu().numpy() for s in bsamp[:n_samps]], save_p=sample_path + f'real.png')
             plt.close('all')
 
     # plot train and test loss over epochs
@@ -141,7 +154,7 @@ for i in pbar:
     plt.savefig(path + 'loss.png')
 
     # early stopping
-    if early_stop(loss_func, losses[-1]):
+    if early_stop(loss_func):
         torch.save(model.state_dict(), check_path + f'model_stopped.pt')
         print('Stopped early!')
         break
@@ -151,5 +164,5 @@ for i in pbar:
         torch.save(model.state_dict(), check_path + f'model_{i+load_ep+1:04}.pt')
 
     # reduce learning rate if average loss is not decreasing
-    lr_scheduler.step(np.mean(losses[-5:]) if i > 10 else losses[-1])
+    lr_scheduler.step(losses[-1])
 

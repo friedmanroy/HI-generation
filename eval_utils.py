@@ -52,7 +52,7 @@ def R2(pred: np.ndarray, true: np.ndarray):
 def compare_spectrums(true_maps: np.ndarray, samples: np.ndarray, size: int=64, dl: float=25/64,
                       type: str= 'mean', fontsize: int=18, loglog: bool=True,
                       semilogx: bool=False, semilogy: bool=False, save_p: str=None, title: str='',
-                      compare_to: list=None, legend: bool=True, equal: bool=False):
+                      compare_to: list=None, legend: bool=True, equal: bool=False, small: bool=False):
     font = {'family': 'serif',
             'color': 'black',
             'size': fontsize,
@@ -67,7 +67,7 @@ def compare_spectrums(true_maps: np.ndarray, samples: np.ndarray, size: int=64, 
 
     if type.lower() == 'mean':
         mu_true, mu_samp = np.mean(true_pows, axis=0), np.mean(samp_pows, axis=0)
-        plots = [(mu_true, 'CAMELS'), (mu_samp, 'HIGlow')]
+        plots = [(mu_true, 'CAMELS', 'o'), (mu_samp, 'HIGlow', '')]
 
         if compare_to is not None:
             plots += [(np.mean(comp_freqs[i], axis=0), compare_to[i][1]) for i in range(len(compare_to))]
@@ -76,7 +76,7 @@ def compare_spectrums(true_maps: np.ndarray, samples: np.ndarray, size: int=64, 
 
     elif type.lower() == 'std':
         std_true, std_samp = np.std(true_pows, axis=0), np.std(samp_pows, axis=0)
-        plots = [(std_true, 'CAMELS'), (std_samp, 'HIGlow')]
+        plots = [(std_true, 'CAMELS', 'o'), (std_samp, 'HIGlow', '')]
 
         if compare_to is not None:
             plots += [(np.std(comp_freqs[i], axis=0), compare_to[i][1]) for i in range(len(compare_to))]
@@ -85,7 +85,7 @@ def compare_spectrums(true_maps: np.ndarray, samples: np.ndarray, size: int=64, 
 
     elif type.lower() == 'skew':
         skew_true, skew_samp = skewness(true_pows, axis=0), skewness(samp_pows, axis=0)
-        plots = [(skew_true, 'CAMELS'), (skew_samp, 'HIGlow')]
+        plots = [(skew_true, 'CAMELS', 'o'), (skew_samp, 'HIGlow', '')]
 
         if compare_to is not None:
             plots += [(skewness(comp_freqs[i], axis=0), compare_to[i][1]) for i in range(len(compare_to))]
@@ -118,13 +118,14 @@ def compare_spectrums(true_maps: np.ndarray, samples: np.ndarray, size: int=64, 
 
     else: raise NotImplemented
 
-    if not equal: plt.figure(dpi=100)
-    else: plt.figure(dpi=100, figsize=(4.5, 4.5))
+    if equal: plt.figure(dpi=100, figsize=(4.5, 4.5))
+    elif small: plt.figure(dpi=100, figsize=(3.5, 4.5))
+    else: plt.figure(dpi=100)
     label = None
 
     # make plots
-    for (plot, label) in plots:
-        plt.plot(true_freqs[0], plot, lw=3, alpha=.75, label=label)
+    for (plot, label, marker) in plots:
+        plt.plot(true_freqs[0], plot, lw=3, alpha=.75, label=label, marker=marker)
 
     # add frequency label
     plt.xlabel('k [h/Mpc]', fontdict=font)
@@ -154,7 +155,7 @@ def compare_spectrums(true_maps: np.ndarray, samples: np.ndarray, size: int=64, 
     else: plt.savefig(save_p)
 
 
-def save_images(images, save_p: str=None, cols=None, title: str=None):
+def save_images(images, save_p: str=None, cols=None, title: str=None, dpi: int=150):
     """
     Save a list of images in a single figure with matplotlib. This only really works well with a relatively small number
     of images, such as 16 - for any more, consider using torchvision's tile.
@@ -169,7 +170,7 @@ def save_images(images, save_p: str=None, cols=None, title: str=None):
     if cols is None:
         cols = int(N//(np.where((N % np.arange(1, np.floor(np.sqrt(N) + 1))) == 0)[0] + 1)[-1])
 
-    fig = plt.figure(figsize=(cols, int(np.ceil(N / float(cols)))))
+    fig = plt.figure(figsize=(cols, int(np.ceil(N / float(cols)))), dpi=dpi)
     gs = GridSpec(cols, int(np.ceil(N / float(cols))))
     gs.update(wspace=.1, hspace=.1)
 
@@ -179,6 +180,7 @@ def save_images(images, save_p: str=None, cols=None, title: str=None):
         a.axis('off')
 
     fig.set_size_inches(np.array(fig.get_size_inches()) * N / 6)
+    if title is not None: plt.title(title)
     gs.tight_layout(fig)
     if save_p is None: plt.show()
     else: plt.savefig(save_p)
