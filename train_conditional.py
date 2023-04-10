@@ -21,6 +21,7 @@ parser.add_argument('-bs', type=int, default=64, help='batch size to use for tra
 parser.add_argument('-prior', type=int, default=0, help='whether to use conditional priors or not')
 parser.add_argument('-sig', type=int, default=0, help='whether to use sigmoid normalization or not')
 parser.add_argument('-actnorm', type=int, default=0, help='whether to add actnorm before each block or not')
+parser.add_argument('-clamp', type=float, default=.5, help='clamping value for sigmoid functions')
 
 args = parser.parse_args()
 
@@ -49,18 +50,14 @@ params = {
     'add_actnorm': args.actnorm != 0,
     'input_size': 64,
     'cond_hidden': 8,
+    'clamp_val': args.clamp,
 }
 
 # ------------------------------------------------------------------------ define paths
 r_path = ''
-if args.prior != 0:
-    path = r_path +\
-           f'cond_prior/{"aug_" if augment else ""}blocks={params["n_blocks"]}_flows={params["n_flows"]}_' \
-           f'hidden={params["hidden_width"]}_batch={batch_size}_nconds={n_conds}/'
-else:
-    path = r_path +\
-           f'condHI_maps/{"aug_" if augment else ""}blocks={params["n_blocks"]}_flows={params["n_flows"]}_' \
-           f'hidden={params["hidden_width"]}_batch={batch_size}_nconds={n_conds}/'
+path = r_path +\
+       f'trained/{"aug_" if augment else ""}blocks={params["n_blocks"]}_flows={params["n_flows"]}_' \
+       f'hidden={params["hidden_width"]}_batch={batch_size}_nconds={n_conds}_prior={args.prior != 0}/'
 
 sample_path = path + 'samples/'
 Path(sample_path).mkdir(exist_ok=True, parents=True)

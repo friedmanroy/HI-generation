@@ -6,6 +6,7 @@ import torch
 from torch import nn
 from typing import Tuple
 from .flow_layers import FlowModule, ZeroConv2d, _diff_clamp, FlowSequential, InvConv2D, Squeeze, Shuffle, ActNorm
+import numpy as np
 
 T = torch.Tensor
 
@@ -33,7 +34,7 @@ def _get_MLP(in_features: int, out_features: int, hidden_width: int=64, depth: i
 
 
 def _cond_block(n_channels, cond_features, hidden_width, affine, n_flows, squeeze: bool=True,
-                shuffle: bool=False, add_actnorm: bool=False):
+                shuffle: bool=False, add_actnorm: bool=False, clamp_val: float=1e-3):
     """
     Create conditional Glow block
     :param n_channels: number of input channels
@@ -44,15 +45,16 @@ def _cond_block(n_channels, cond_features, hidden_width, affine, n_flows, squeez
     :param squeeze: whether to squeeze the input at the start of the block or not
     :param shuffle: a bool indicating whether to shuffle instead of using the invertible 2D convolutions
     :param add_actnorm: a bool indicating whether to add an actnorm at beginning of each block
+    :param clamp_val: clamping value for sigmoid functions
     :return: a flow module that represents a conditional Glow's flow block
     """
     def flow():
         return FlowSequential(
             InvConv2D(in_channel=n_channels) if not shuffle else Shuffle(dim=0),
             AffineInjector(n_channels=n_channels, cond_channels=cond_features, hidden_width=hidden_width,
-                           affine=affine, same_size=False),
+                           affine=affine, same_size=False, scale_clamp=1e-3),
             CondAffineCoupling(n_channels=n_channels, cond_features=cond_features, affine=affine,
-                               hidden_width=hidden_width, same_size=False)
+                               hidden_width=hidden_width, same_size=False, sigmoid_clamp=clamp_val)
         )
 
     bl = [flow() for _ in range(n_flows)]
@@ -64,7 +66,7 @@ def _cond_block(n_channels, cond_features, hidden_width, affine, n_flows, squeez
 class CondAffineCoupling(FlowModule):
 
     def __init__(self, n_channels: int, cond_features: int, affine: bool=True, hidden_width: int=512,
-                 same_size: bool=True):
+                 same_size: bool=True, sigmoid_clamp: float=1e-3):
         """
         Implementation of the conditional affine coupling.
 
@@ -77,11 +79,14 @@ class CondAffineCoupling(FlowModule):
         :param hidden_width: the width that should be used for the hidden layer in the convolution
         :param same_size: a boolean indicating whether the conditional parameters have the same spatial dimensions as
                           the input variables (as used in SRFlow) or not
+        :param sigmoid_clamp: clamps the minimum value of the sigmoid activation, hopefully resulting in more stable
+                              behavior when generating new samples
         """
         super(CondAffineCoupling, self).__init__()
 
         self.affine = affine
         self.same = same_size
+        self.sig_val = sigmoid_clamp
 
         # define network for affine coupling
         self.CNN = nn.Sequential(
@@ -118,7 +123,7 @@ class CondAffineCoupling(FlowModule):
             # if the transformation is affine, divide to translation and scale
             log_s, t = net_out.chunk(2, 1)
             # pass scale through a sigmoid for numerical stability, add 2 so initially acts as identity
-            s = _diff_clamp(torch.sigmoid(log_s + 2), min=1e-3, max=1e3)
+            s = (1-self.sig_val)*torch.sigmoid(log_s + 2) + self.sig_val
             out_b = (in_b + t) * s
             logdet = torch.sum(torch.log(s).view(x.shape[0], -1), 1)
         else:
@@ -133,7 +138,7 @@ class CondAffineCoupling(FlowModule):
 
         if self.affine:
             log_s, t = net_out.chunk(2, 1)
-            s = _diff_clamp(torch.sigmoid(log_s + 2), min=1e-3, max=1e3)
+            s = (1-self.sig_val)*torch.sigmoid(log_s + 2) + self.sig_val
             in_b = out_b / s - t
         else: in_b = out_b - net_out
 
@@ -143,7 +148,7 @@ class CondAffineCoupling(FlowModule):
 class AffineInjector(FlowModule):
 
     def __init__(self, n_channels: int, cond_channels: int, hidden_width: int=512, affine: bool=True,
-                 same_size: bool=True):
+                 same_size: bool=True, scale_clamp: float=1e-3):
         """
         Implementation of the Affine Injector Flow module used in SRFlow, allowing for simple conditional operations.
         The affine injector is a learned, conditional, element wise affine transformation of the inputs.
@@ -155,10 +160,12 @@ class AffineInjector(FlowModule):
         :param affine: a boolean indicating whether the transformation should be affine or just translational
         :param same_size: a boolean indicating whether the conditional parameters have the same spatial dimensions as
                           the input variables (as used in SRFlow) or not
+        :param scale_clamp: clamps the how close the scale can get to zero by the amount indicated
         """
         super(AffineInjector, self).__init__()
         self.affine = affine
         self.same = same_size
+        self.clamp_val = scale_clamp
 
         # define network for affine coupling
         self.CNN = nn.Sequential(
@@ -191,7 +198,7 @@ class AffineInjector(FlowModule):
         bias = self.CNN(self._make_input(x, cond))
         if self.affine:
             bias, log_scale = bias.chunk(2, dim=1)
-            log_scale = _diff_clamp(log_scale, min=-5, max=5)
+            log_scale = _diff_clamp(log_scale, min=np.log(self.clamp_val), max=5)
         else: log_scale = torch.zeros_like(bias)
         return x*torch.exp(log_scale) + bias, torch.sum(log_scale.reshape(log_scale.shape[0], -1), dim=1)
 
@@ -199,6 +206,6 @@ class AffineInjector(FlowModule):
         bias = self.CNN(self._make_input(y, cond))
         if self.affine:
             bias, log_scale = bias.chunk(2, dim=1)
-            log_scale = _diff_clamp(log_scale, min=-5, max=5)
+            log_scale = _diff_clamp(log_scale, min=np.log(self.clamp_val), max=5)
         else: log_scale = torch.zeros_like(bias)
         return torch.exp(-log_scale)*(y - bias)

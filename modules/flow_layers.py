@@ -92,9 +92,10 @@ class ActNorm(FlowModule):
     channel of the input.
     """
 
-    def __init__(self, n_channels: int):
+    def __init__(self, n_channels: int, scale_clamp: float=1e-3):
         """
         :param n_channels: number of input channels of the data
+        :param scale_clamp: clamps the how close the scale can get to zero by the amount indicated
         """
         super(ActNorm, self).__init__()
 
@@ -102,6 +103,8 @@ class ActNorm(FlowModule):
         self.scale = nn.Parameter(torch.ones(1, n_channels, 1, 1))
 
         self.register_buffer("initialized", torch.tensor(0, dtype=torch.uint8))
+
+        self.scale_clamp = scale_clamp
 
     def initialize(self, input: T):
         """
@@ -137,13 +140,15 @@ class ActNorm(FlowModule):
             self.initialize(x)
             self.initialized.fill_(1)
 
-        log_abs = torch.log(torch.abs(self.scale))
+        s = _zero_clamp(self.scale, self.scale_clamp, self.scale_clamp)
+        log_abs = torch.log(torch.abs(s))
 
         logdet = height * width * torch.sum(log_abs)
-        return self.scale * (x + self.loc), logdet
+        return s * (x + self.loc), logdet
 
     def reverse(self, y: T, cond: T=None) -> T:
-        return y / self.scale - self.loc
+        s = _zero_clamp(self.scale, self.scale_clamp, self.scale_clamp)
+        return y / s - self.loc
 
 
 class ZeroConv2d(nn.Module):
@@ -172,16 +177,18 @@ class AffineCoupling(FlowModule):
     Implementation of the AffineCoupling Flow module used in Glow.
     """
 
-    def __init__(self, n_channels: int, affine: bool=True, hidden_width: int=512):
+    def __init__(self, n_channels: int, affine: bool=True, hidden_width: int=512, sigmoid_clamp: float=1e-3):
         """
         :param n_channels: number of input channels
         :param affine: whether the transformation should be affine or only linear
         :param hidden_width: the width that should be used for the hidden layers of the transformation
+        :param sigmoid_clamp: clamps the minimum value of the sigmoid activation, hopefully resulting in more stable
+                              behavior when generating new samples
         """
         super(AffineCoupling, self).__init__()
 
         self.affine = affine
-
+        self.sig_val = sigmoid_clamp
         self.net = nn.Sequential(
             nn.Conv2d(n_channels // 2, hidden_width, 3, padding=1),
             nn.ReLU(inplace=True),
@@ -201,9 +208,7 @@ class AffineCoupling(FlowModule):
 
         if self.affine:
             log_s, t = self.net(in_a).chunk(2, 1)
-            # s = torch.exp(log_s)
-            s = torch.sigmoid(log_s + 2)
-            # out_a = s * in_a + t
+            s = (1-self.sig_val)*torch.sigmoid(log_s + 2) + self.sig_val
             out_b = (in_b + t) * s
 
             logdet = torch.sum(torch.log(s).view(x.shape[0], -1), 1)
@@ -220,9 +225,7 @@ class AffineCoupling(FlowModule):
 
         if self.affine:
             log_s, t = self.net(out_a).chunk(2, 1)
-            # s = torch.exp(log_s)
-            s = torch.sigmoid(log_s + 2)
-            # in_a = (out_a - t) / s
+            s = (1-self.sig_val)*torch.sigmoid(log_s + 2) + self.sig_val
             in_b = out_b / s - t
 
         else:
