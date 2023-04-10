@@ -4,7 +4,7 @@ from torch import nn
 from .flow_layers import GlowBlock, ActNorm, InvConv2D, FlowSequential, Squeeze, Shuffle
 from .conditional_layers import _cond_block
 from .priors import SplitGaussianPrior, GaussianPrior, CondGaussianPrior, SplitCondPrior
-from typing import List, Tuple
+from typing import List, Tuple, Union
 
 T = torch.Tensor
 
@@ -97,7 +97,7 @@ class CondGlow(nn.Module):
         self.affine = affine
         self.hidden_width = hidden_width
         self.priors = nn.ModuleList()
-        self.in_shape, self.latent_shapes = None, None
+        self.in_shape, self.latent_shapes, self.latent_len = None, None, None
         self.start = start
         cond_hidden = cond_hidden if cond_hidden is not None else hidden_width
 
@@ -156,9 +156,11 @@ class CondGlow(nn.Module):
         # return latent variables and the calculated log-probability
         return zs, log_prob
 
-    @torch.no_grad()
-    def reverse(self, zs: list = None, cond: T = None, clip_val: int = None):
+    def reverse(self, zs: Union[list, T] = None, cond: T = None, clip_val: int = None):
+        if self.latent_len is None: self.latent_len = np.sum([np.prod(sh) for sh in self.latent_shapes])
+
         if zs is None: zs = self.sample_latent(N=cond.shape[0])
+        elif torch.is_tensor(zs): zs = self.latent_to_list(zs)
         x = self.priors[-1].reverse(zs[-1], cond=cond)
         for i, pr in enumerate(self.priors[::-1][1:]):
             x = pr.reverse(x, zs[-i - 2] if zs else None, cond=cond)
@@ -172,6 +174,28 @@ class CondGlow(nn.Module):
         return [self.temperature * torch.randn(N, *shp, device=list(self.parameters())[0].device) for shp in
                 self.latent_shapes]
 
+    def latent_to_list(self, z: T):
+        assert z.shape[1] == self.latent_len
+        ret = []
+        sh = 0
+        for shape in self.latent_shapes:
+            ret.append(z[:, sh:np.prod(shape)+sh].reshape(-1, *shape))
+            sh += np.sum(shape)
+        return ret
+
+    def list_to_latent(self, z: list):
+        N = z[0].shape[0]
+        return torch.concat([a.reshape(N, -1) for a in z], dim=1)
+
     @torch.no_grad()
     def sample(self, cond: T, N: int, clip_val: int = None):
         return self.reverse(self.sample_latent(N), cond=cond, clip_val=clip_val)
+
+    def latent_ll(self, z: Union[list, T], cond: T=None):
+        if torch.is_tensor(z): z = self.latent_to_list(z)
+        N = z[0].shape[0]
+        ll = 0
+        for i, pr in enumerate(self.priors):
+            ll = ll -.5*torch.sum((((z[i] - pr.mean)**2)*torch.exp(-pr.log_var)).reshape(N, -1), dim=1) \
+                 -.5*torch.sum(pr.log_var)
+        return ll
