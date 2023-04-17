@@ -140,14 +140,14 @@ class ActNorm(FlowModule):
             self.initialize(x)
             self.initialized.fill_(1)
 
-        s = _zero_clamp(self.scale, self.scale_clamp, self.scale_clamp)
+        s = _zero_clamp(self.scale, self.scale_clamp, 1e5)
         log_abs = torch.log(torch.abs(s))
 
         logdet = height * width * torch.sum(log_abs)
         return s * (x + self.loc), logdet
 
     def reverse(self, y: T, cond: T=None) -> T:
-        s = _zero_clamp(self.scale, self.scale_clamp, self.scale_clamp)
+        s = _zero_clamp(self.scale, self.scale_clamp, 1e5)
         return y / s - self.loc
 
 
